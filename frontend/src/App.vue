@@ -1,5 +1,10 @@
 <template>
   <div id="app" class="app-container">
+    <!-- Loading: 恢复登录状态中 -->
+    <div v-if="!appReady" class="app-loading">
+      <el-icon class="is-loading" :size="36"><Loading /></el-icon>
+    </div>
+
     <!-- Shop Owner Layout -->
     <template v-if="authStore.user?.role === 'shop_owner'">
       <el-container class="layout">
@@ -79,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -88,6 +93,21 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const currentRoute = computed(() => route.path)
+const appReady = ref(false)
+
+onMounted(async () => {
+  // 页面刷新后恢复用户信息（token在localStorage但user已丢失）
+  const token = localStorage.getItem('access_token')
+  if (token && !authStore.user) {
+    try {
+      await authStore.fetchMe()
+    } catch {
+      // token过期或无效，清除并跳转登录
+      authStore.logout()
+    }
+  }
+  appReady.value = true
+})
 
 function logout() {
   authStore.logout()
@@ -99,6 +119,12 @@ function logout() {
 .app-container {
   min-height: 100vh;
   background: #f5f7fa;
+}
+.app-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .layout {
