@@ -1,0 +1,53 @@
+{
+  "trip": {
+    "code": "YN-LJ-2026-001",
+    "title": "云南丽江古城5日深度游",
+    "subtitle": "遇见古城，邂逅纳西文化",
+    "destination": "云南丽江",
+    "category": "国内游",
+    "duration_days": 5,
+    "duration_nights": 4,
+    "price_adult": 3980,
+    "price_child": 2680,
+    "highlights": [
+      "登玉龙雪山冰川公园，海拔4506米观景台",
+      "夜游丽江古城，体验纳西族篝火晚会",
+      "泸沽湖猪槽船游湖，探访摩梭人家",
+      "茶马古道骑马体验，穿越原始森林"
+    ],
+    "price_includes": ["往返机票", "4晚酒店住宿", "全程大巴", "行程所列门票", "导游服务", "旅游保险"],
+    "price_excludes": ["个人消费", "单房差800元", "自费项目"]
+  },
+  "schedules": [
+    {
+      "day_number": 1,
+      "theme": "出发抵达，初识丽江",
+      "schedule_type": "交通",
+      "description": "乘航班抵达丽江三义机场，专车接机入住酒店，晚间自由逛古城"
+    },
+    {
+      "day_number": 2,
+      "theme": "玉龙雪山一日游",
+      "schedule_type": "景点",
+      "description": "乘索道登玉龙雪山冰川公园，下午游览蓝月谷，晚上观看《印象丽江》演出"
+    },
+    {
+      "day_number": 3,
+      "theme": "泸沽湖探秘",
+      "schedule_type": "景点",
+      "description": "驱车前往泸沽湖(4小时)，猪槽船游湖，参观走婚桥，入住湖景客栈"
+    },
+    {
+      "day_number": 4,
+      "theme": "摩梭文化体验",
+      "schedule_type": "文化",
+      "description": "上午参观摩梭博物馆，下午返回丽江，途径宁蒗彝族村寨"
+    },
+    {
+      "day_number": 5,
+      "theme": "束河古镇，返程",
+      "schedule_type": "景点",
+      "description": "上午游览束河古镇和拉市海，下午送机返程"
+    }
+  ]
+}
