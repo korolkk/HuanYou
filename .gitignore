@@ -20,6 +20,7 @@ venv/
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
 
 # IDE
 .vscode/
@@ -45,6 +46,11 @@ Desktop.ini
 # Uploads
 data/uploads/*
 !data/uploads/.gitkeep
+
+# User data files in root
+/*.docx
+/*.doc
+/*.pdf
 
 # Temp
 *.tmp

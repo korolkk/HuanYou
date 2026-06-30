@@ -26,10 +26,10 @@ async def import_trip_file(
     filename = file.filename or ""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
-    if ext not in ("xlsx", "json"):
+    if ext not in ("xlsx", "json", "docx", "pdf"):
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件格式: .{ext}，请上传 .xlsx 或 .json 文件",
+            detail=f"不支持的文件格式: .{ext}，请上传 .xlsx / .json / .docx / .pdf 文件",
         )
 
     content = await file.read()

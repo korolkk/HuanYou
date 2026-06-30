@@ -25,12 +25,13 @@
 
           <el-alert type="info" :closable="false" show-icon style="margin-top:16px">
             <template #title>
-              <strong>Excel格式要求：</strong>
+              <strong>支持格式：</strong>
               <ul style="margin:8px 0 0;padding-left:16px;line-height:1.8">
-                <li>Sheet「行程概要」— 行程基本信息</li>
-                <li>Sheet「行程安排」— 逐日行程明细</li>
-                <li>表头需包含：天数、主题、类型、地点、描述等</li>
-                <li>建议先下载模板参考格式</li>
+                <li><strong>Excel (.xlsx)</strong> — Sheet「行程概要」+「行程安排」</li>
+                <li><strong>Word (.docx)</strong> — 旅行社行程文档，自动提取行程/价格</li>
+                <li><strong>PDF (.pdf)</strong> — PDF行程文件，自动提取文本和表格</li>
+                <li><strong>JSON (.json)</strong> — 结构化行程数据</li>
+                <li>建议先下载模板参考Excel格式</li>
               </ul>
             </template>
           </el-alert>

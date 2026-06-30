@@ -29,8 +29,8 @@ const props = withDefaults(defineProps<{
   accept?: string
   acceptLabel?: string
 }>(), {
-  accept: '.xlsx,.json',
-  acceptLabel: '.xlsx / .json (最大20MB)',
+  accept: '.xlsx,.json,.docx,.pdf',
+  acceptLabel: '.xlsx / .json / .docx / .pdf (最大20MB)',
 })
 
 const emit = defineEmits<{ 'update:file': [file: File | null] }>()

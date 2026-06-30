@@ -110,10 +110,13 @@ class TripImportService:
             parsed = json.loads(content.decode("utf-8"))
             parsed = {
                 "trip": parsed.get("trip", parsed),
-                "schedules": parsed.get("schedules", parsed.get("itinerary", [])),
-            }
+                "schedules": parsed.get("schedules", parsed.get("itinerary", []))}
+        elif ext == "docx":
+            parsed = TripImportService._parse_docx(content)
+        elif ext == "pdf":
+            parsed = TripImportService._parse_pdf(content)
         else:
-            raise ValueError(f"不支持的文件格式: .{ext}，请上传 .xlsx 或 .json")
+            raise ValueError(f"不支持的文件格式: .{ext}，请上传 .xlsx / .json / .docx / .pdf")
 
         trip_data = parsed.get("trip", {})
         schedules_data = parsed.get("schedules", [])
@@ -167,7 +170,7 @@ class TripImportService:
             province=str(trip_data.get("province", "")) if trip_data.get("province") else None,
             city=str(trip_data.get("city", "")) if trip_data.get("city") else None,
             category=str(trip_data.get("category", trip_data.get("类型", "国内游"))),
-            duration_days=_int(trip_data.get("duration_days", trip_data.get("天数"), 1)),
+            duration_days=_int(trip_data.get("duration_days", trip_data.get("天数", 1))),
             duration_nights=_int(trip_data.get("duration_nights", trip_data.get("晚数"))),
             departure_city=str(trip_data.get("departure_city", trip_data.get("出发城市", ""))) if trip_data.get("departure_city") else None,
             best_season=str(trip_data.get("best_season", trip_data.get("最佳季节", ""))) if trip_data.get("best_season") else None,
@@ -177,7 +180,7 @@ class TripImportService:
             single_room_supplement=_float(trip_data.get("single_room_supplement", trip_data.get("单房差"))),
             price_includes=_list(trip_data.get("price_includes", trip_data.get("费用包含"))),
             price_excludes=_list(trip_data.get("price_excludes", trip_data.get("费用不含"))),
-            group_size_min=_int(trip_data.get("group_size_min", trip_data.get("成团最小人数"), 1)),
+            group_size_min=_int(trip_data.get("group_size_min", trip_data.get("成团最小人数", 1))),
             group_size_max=_int(trip_data.get("group_size_max", trip_data.get("成团最大人数"))) or None,
             departure_dates=_list(trip_data.get("departure_dates", trip_data.get("发团日期"))),
             status="active",
@@ -295,3 +298,360 @@ class TripImportService:
                 break
 
         return {"trip": trip_data, "schedules": schedules}
+
+    @staticmethod
+    def _parse_docx(content: bytes) -> dict:
+        """Parse DOCX travel itinerary file into structured trip + schedules."""
+        try:
+            from docx import Document
+        except ImportError:
+            raise RuntimeError("python-docx 未安装，无法解析 DOCX 文件")
+
+        doc = Document(io.BytesIO(content))
+
+        # ── Extract all paragraphs ──
+        paragraphs = []
+        for p in doc.paragraphs:
+            text = p.text.strip()
+            if text:
+                # Detect bold/heading style
+                is_bold = any(run.bold for run in p.runs if run.bold)
+                style = p.style.name if p.style else ""
+                paragraphs.append({"text": text, "bold": is_bold, "style": style})
+
+        # ── Extract all tables ──
+        tables = []
+        for t in doc.tables:
+            rows = []
+            for row in t.rows:
+                cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+                rows.append(cells)
+            tables.append(rows)
+
+        trip = {}
+        schedules = []
+        import re
+
+        # ── Parse title from first meaningful paragraphs ──
+        title_parts = []
+        for p in paragraphs[:6]:
+            txt = p["text"]
+            # Skip short promotional lines like "真纯玩不擦边"
+            if len(txt) > 6 and ("伊犁" in txt or "新疆" in txt or "双飞" in txt or "日" in txt):
+                title_parts.append(txt)
+        trip["title"] = title_parts[0] if title_parts else paragraphs[0]["text"] if paragraphs else "未命名行程"
+        trip["subtitle"] = title_parts[1] if len(title_parts) > 1 else ""
+
+        # ── Extract price ──
+        for p in paragraphs:
+            m = re.search(r'(?:成人|价格)[：:]?\s*(\d{3,5})\s*元', p["text"])
+            if m:
+                trip["price_adult"] = float(m.group(1))
+                break
+        # Also check table cells
+        for t in tables:
+            for row in t:
+                row_text = " ".join(row)
+                m = re.search(r'成人[：:]?\s*(\d{3,5})\s*元', row_text)
+                if m:
+                    trip["price_adult"] = float(m.group(1))
+                    break
+
+        # ── Extract duration ──
+        for p in paragraphs:
+            m = re.search(r'(?:双飞|纯玩)?(\d+)\s*日', p["text"])
+            if m and int(m.group(1)) >= 2:
+                trip["duration_days"] = int(m.group(1))
+                break
+        if "duration_days" not in trip:
+            trip["duration_days"] = 8  # default
+
+        # ── Extract destination ──
+        dest_keywords = ["新疆", "伊犁", "独库", "天山", "乌鲁木齐", "赛里木湖", "那拉提", "吐鲁番", "喀纳斯"]
+        found_dests = []
+        all_text = " ".join(p["text"] for p in paragraphs)
+        for kw in dest_keywords:
+            if kw in all_text:
+                found_dests.append(kw)
+        trip["destination"] = found_dests[0] if found_dests else "新疆"
+        trip["destinations_detail"] = found_dests[:5] if found_dests else []
+        trip["category"] = "国内游"
+        trip["country"] = "中国"
+        trip["province"] = "新疆"
+
+        # ── Parse itinerary table (quick reference table) ──
+        # Find table with day columns (DAY1, D1, 第1天 等)
+        overview_table = None
+        for t in tables:
+            if len(t) >= 3 and t[0]:
+                first_row = " ".join(t[0]).lower()
+                if any(kw in first_row for kw in ["day", "天", "行程", "用餐", "住宿"]):
+                    overview_table = t
+                    break
+        if not overview_table and tables:
+            overview_table = tables[0]
+
+        if overview_table:
+            # Determine which columns contain what
+            header = overview_table[0]
+            day_col = None
+            route_col = None
+            meal_col = None
+            hotel_col = None
+            for i, h in enumerate(header):
+                h_l = h.lower()
+                if any(kw in h_l for kw in ["day", "天", "d"]):
+                    day_col = i
+                elif any(kw in h_l for kw in ["行程", "路线", "安排"]):
+                    route_col = i
+                elif any(kw in h_l for kw in ["餐", "吃", "用餐"]):
+                    meal_col = i
+                elif any(kw in h_l for kw in ["住宿", "酒店", "住"]):
+                    hotel_col = i
+
+            for row in overview_table[1:]:
+                if not any(row):
+                    continue
+                day_text = str(row[day_col]).strip() if day_col is not None and day_col < len(row) else ""
+                m = re.search(r'(\d+)', day_text)
+                day_num = int(m.group(1)) if m else len(schedules) + 1
+                if day_num < 1 or day_num > 15:
+                    continue
+
+                route = str(row[route_col]).strip() if route_col is not None and route_col < len(row) else ""
+                meal = str(row[meal_col]).strip() if meal_col is not None and meal_col < len(row) else ""
+                hotel = str(row[hotel_col]).strip() if hotel_col is not None and hotel_col < len(row) else ""
+
+                schedules.append({
+                    "day_number": day_num,
+                    "theme": route,
+                    "schedule_type": "景点",
+                    "meal_included": meal,
+                    "hotel_name": hotel,
+                    "description": "",
+                    "tips": "",
+                })
+
+        # ── Parse detailed day descriptions from paragraphs ──
+        day_pattern = re.compile(r'(?:DAY|D|第)\s*(\d{1,2})\s*(?:天|日)', re.IGNORECASE)
+        current_day = None
+        day_buffer = []
+        tips_buffer = []
+
+        for p in paragraphs:
+            txt = p["text"]
+            dm = day_pattern.search(txt)
+            if dm:
+                # Save previous day's content
+                if current_day is not None and day_buffer:
+                    for s in schedules:
+                        if s["day_number"] == current_day:
+                            s["description"] = " ".join(day_buffer)
+                            if tips_buffer:
+                                s["tips"] = " ".join(tips_buffer)
+                            break
+                    else:
+                        # Day not in overview table: add it
+                        schedules.append({
+                            "day_number": current_day,
+                            "theme": "",
+                            "schedule_type": "景点",
+                            "description": " ".join(day_buffer),
+                            "tips": " ".join(tips_buffer) if tips_buffer else "",
+                        })
+                current_day = int(dm.group(1))
+                day_buffer = [txt]
+                tips_buffer = []
+            elif current_day is not None:
+                if "温馨提示" in txt or "注意" in txt:
+                    tips_buffer.append(txt)
+                elif "住宿" in txt or "酒店" in txt:
+                    # Extract hotel info
+                    for s in schedules:
+                        if s["day_number"] == current_day and not s.get("hotel_name"):
+                            s["hotel_name"] = txt
+                    day_buffer.append(txt)
+                else:
+                    day_buffer.append(txt)
+
+        # Save last day
+        if current_day is not None and day_buffer:
+            for s in schedules:
+                if s["day_number"] == current_day:
+                    s["description"] = " ".join(day_buffer)
+                    if tips_buffer:
+                        s["tips"] = " ".join(tips_buffer)
+                    break
+            else:
+                schedules.append({
+                    "day_number": current_day,
+                    "theme": "",
+                    "schedule_type": "景点",
+                    "description": " ".join(day_buffer),
+                    "tips": " ".join(tips_buffer) if tips_buffer else "",
+                })
+
+        # ── Parse fee sections ──
+        includes = []
+        excludes = []
+        in_excludes = False
+        for p in paragraphs:
+            txt = p["text"]
+            if any(kw in txt for kw in ["费用不含", "不含", "费用不包含"]):
+                in_excludes = True
+                continue
+            if any(kw in txt for kw in ["费用包含", "包含项目"]):
+                in_excludes = False
+                continue
+
+            # Match list items: "1. xxx" or "- xxx" or "xxx：yyy"
+            items = re.findall(r'(?:^\d+[\.\、)]\s*|[-•]\s*)(.+)', txt)
+            if items:
+                if in_excludes:
+                    excludes.extend(items)
+                else:
+                    includes.extend(items)
+
+        # Fallback: parse tables for fees
+        if not includes:
+            for t in tables:
+                for row in t:
+                    row_text = " ".join(row)
+                    if "费用包含" in row_text or "包含" in row_text:
+                        includes.extend([c for c in row if c and "费用" not in c and len(c) > 5])
+                    if "不含" in row_text:
+                        excludes.extend([c for c in row if c and "费用" not in c and len(c) > 5])
+
+        trip["price_includes"] = includes[:10] if includes else []
+        trip["price_excludes"] = excludes[:10] if excludes else []
+
+        return {"trip": trip, "schedules": schedules}
+
+    @staticmethod
+    def _parse_pdf(content: bytes) -> dict:
+        """Parse PDF travel itinerary into structured trip + schedules."""
+        all_text = ""
+        tables = []
+
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        all_text += text + "\n"
+                    page_tables = page.extract_tables()
+                    for t in page_tables:
+                        rows = []
+                        for row in t:
+                            cells = [str(c).strip() if c else "" for c in row]
+                            rows.append(cells)
+                        if rows:
+                            tables.append(rows)
+        except Exception:
+            try:
+                from PyPDF2 import PdfReader
+                reader = PdfReader(io.BytesIO(content))
+                for page in reader.pages:
+                    text = page.extract_text()
+                    if text:
+                        all_text += text + "\n"
+            except Exception:
+                all_text = "[PDF parsing requires pdfplumber or PyPDF2]"
+
+        import re
+        trip = {"country": "中国", "category": "国内游"}
+        schedules = []
+        lines = all_text.split("\n")
+
+        # ── Title ──
+        for line in lines[:10]:
+            line = line.strip()
+            if len(line) > 6:
+                trip["title"] = line
+                break
+        if "title" not in trip:
+            trip["title"] = "未命名行程"
+
+        # ── Price ──
+        for line in lines:
+            m = re.search(r'(?:成人|价格)[：:]?\s*(\d{3,5})\s*元', line)
+            if m:
+                trip["price_adult"] = float(m.group(1))
+                break
+
+        # ── Duration ──
+        for line in lines:
+            m = re.search(r'(\d+)\s*日', line)
+            if m and int(m.group(1)) >= 2:
+                trip["duration_days"] = int(m.group(1))
+                break
+        if "duration_days" not in trip:
+            trip["duration_days"] = 8
+
+        # ── Destination ──
+        dest_keywords = ["新疆", "伊犁", "独库", "天山", "赛里木湖", "那拉提", "吐鲁番", "喀纳斯"]
+        found = [kw for kw in dest_keywords if kw in all_text]
+        trip["destination"] = found[0] if found else "未知"
+        trip["destinations_detail"] = found[:5] if found else []
+
+        # ── Parse tables for schedules ──
+        for t in tables:
+            if len(t) >= 3:
+                header = " ".join(t[0]).lower()
+                if any(kw in header for kw in ["day", "天", "行程", "用餐"]):
+                    day_col = route_col = meal_col = hotel_col = None
+                    for i, h in enumerate(t[0]):
+                        h_l = h.lower()
+                        if any(kw in h_l for kw in ["day", "天"]):
+                            day_col = i
+                        elif any(kw in h_l for kw in ["行程", "安排"]):
+                            route_col = i
+                        elif any(kw in h_l for kw in ["餐"]):
+                            meal_col = i
+                        elif any(kw in h_l for kw in ["住宿", "酒店"]):
+                            hotel_col = i
+                    for row in t[1:]:
+                        day_text = row[day_col] if day_col is not None and day_col < len(row) else ""
+                        m = re.search(r'(\d+)', day_text)
+                        if m:
+                            schedules.append({
+                                "day_number": int(m.group(1)),
+                                "theme": row[route_col] if route_col is not None and route_col < len(row) else "",
+                                "schedule_type": "景点",
+                                "meal_included": row[meal_col] if meal_col is not None and meal_col < len(row) else "",
+                                "hotel_name": row[hotel_col] if hotel_col is not None and hotel_col < len(row) else "",
+                                "description": "",
+                            })
+
+        # ── Parse day descriptions from text ──
+        if not schedules:
+            day_pattern = re.compile(r'(?:第|D|DAY)\s*(\d{1,2})\s*(?:天|日)', re.IGNORECASE)
+            current_day = None
+            buffer = []
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                dm = day_pattern.search(line)
+                if dm:
+                    if current_day and buffer:
+                        schedules.append({
+                            "day_number": current_day,
+                            "theme": buffer[0] if buffer else "",
+                            "schedule_type": "景点",
+                            "description": " ".join(buffer),
+                        })
+                    current_day = int(dm.group(1))
+                    buffer = [line]
+                elif current_day:
+                    buffer.append(line)
+            if current_day and buffer:
+                schedules.append({
+                    "day_number": current_day,
+                    "theme": buffer[0] if buffer else "",
+                    "schedule_type": "景点",
+                    "description": " ".join(buffer),
+                })
+
+        return {"trip": trip, "schedules": schedules}
