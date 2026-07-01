@@ -357,6 +357,21 @@ class TripImportService:
                     trip["price_adult"] = float(m.group(1))
                     break
 
+        # ── Extract children's price ──
+        for p in paragraphs:
+            m = re.search(r'(?:小孩|儿童|12周岁以下)[^\d]*(\d{3,5})\s*元', p["text"])
+            if m:
+                trip["price_child"] = float(m.group(1))
+                break
+        if "price_child" not in trip:
+            for t in tables:
+                for row in t:
+                    row_text = " ".join(row)
+                    m = re.search(r'(?:小孩|儿童|12周岁以下)[^\d]*(\d{3,5})\s*元', row_text)
+                    if m:
+                        trip["price_child"] = float(m.group(1))
+                        break
+
         # ── Extract duration ──
         for p in paragraphs:
             m = re.search(r'(?:双飞|纯玩)?(\d+)\s*日', p["text"])
@@ -375,6 +390,24 @@ class TripImportService:
                 found_dests.append(kw)
         trip["destination"] = found_dests[0] if found_dests else "新疆"
         trip["destinations_detail"] = found_dests[:5] if found_dests else []
+
+        # ── Extract departure city ──
+        for p in paragraphs:
+            m = re.search(r'(?:集合出发|出发).*?(?:桐乡|嘉兴|杭州|上海|北京|广州|深圳|成都|南京|武汉)', p["text"])
+            if m:
+                # Extract just the city name
+                city_m = re.search(r'(桐乡|嘉兴|杭州|上海|北京|广州|深圳|成都|南京|武汉)', p["text"])
+                if city_m:
+                    trip["departure_city"] = city_m.group(1)
+                    break
+        # Also check overall text
+        if "departure_city" not in trip:
+            all_paras = " ".join(p["text"] for p in paragraphs)
+            m = re.search(r'(?:桐乡|嘉兴|杭州).*?(?:集合出发|出发)', all_paras)
+            if m:
+                m2 = re.search(r'(桐乡|嘉兴|杭州)', all_paras)
+                if m2:
+                    trip["departure_city"] = m2.group(1)
         trip["category"] = "国内游"
         trip["country"] = "中国"
         trip["province"] = "新疆"
