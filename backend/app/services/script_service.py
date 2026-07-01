@@ -118,15 +118,33 @@ class ScriptGenerationService:
 
     @staticmethod
     def _parse_llm_json(text: str) -> dict:
-        """Extract JSON from LLM response."""
+        """Extract the first complete JSON object from LLM response."""
         text = text.strip()
         # Remove markdown code fences
         text = re.sub(r'^```(?:json)?\s*', '', text)
         text = re.sub(r'\s*```$', '', text)
-        # Find JSON object
+        # Find the first balanced JSON object by counting braces
+        start = text.find('{')
+        if start == -1:
+            return {}
+        depth = 0
+        for i, ch in enumerate(text[start:], start):
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        pass
+        # Fallback: try the greedy match
         match = re.search(r'\{[\s\S]*\}', text)
         if match:
-            return json.loads(match.group())
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
         return {}
 
     @classmethod
