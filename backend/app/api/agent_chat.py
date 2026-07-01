@@ -35,6 +35,7 @@ async def _build_llm():
             base_url=settings.DEEPSEEK_BASE_URL,
             temperature=0.7,
             max_tokens=2048,
+            request_timeout=90,
         )
 
     if settings.DASHSCOPE_API_KEY:
@@ -45,6 +46,7 @@ async def _build_llm():
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             temperature=0.7,
             max_tokens=2048,
+            request_timeout=90,
         )
 
     return None

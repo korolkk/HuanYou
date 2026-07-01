@@ -97,7 +97,8 @@ class ScriptGenerationService:
                 api_key=settings.DEEPSEEK_API_KEY,
                 base_url=settings.DEEPSEEK_BASE_URL,
                 temperature=0.7,
-                max_tokens=4096,
+                max_tokens=2048,
+                request_timeout=90,
             )
         if settings.DASHSCOPE_API_KEY:
             from langchain_openai import ChatOpenAI
@@ -106,7 +107,8 @@ class ScriptGenerationService:
                 api_key=settings.DASHSCOPE_API_KEY,
                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
                 temperature=0.7,
-                max_tokens=4096,
+                max_tokens=2048,
+                request_timeout=90,
             )
         return None
 
@@ -283,8 +285,8 @@ class ScriptGenerationService:
         full_text = "\n\n".join(s.text for s in segments)
 
         # ── Stage 4: Evaluate ──
-        eval_text_for_review = "\n\n".join(
-            f"[{s.segment_type}] {s.timecode_start}-{s.timecode_end}: {s.text[:200]}"
+        eval_text_for_review = "\n".join(
+            f"[{s.segment_type}] {s.text[:100]}"
             for s in segments
         )
         eval_response = await llm.ainvoke([
