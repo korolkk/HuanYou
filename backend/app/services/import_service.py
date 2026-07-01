@@ -134,8 +134,7 @@ class TripImportService:
                 warnings.append(f"行程编号已存在，自动改为 {code}")
 
         if not code:
-            import uuid as _uuid
-            code = f"IMPORT-{_uuid.uuid4().hex[:8].upper()}"
+            code = await TripImportService._generate_code(trip_data, db)
 
         # Parse numeric fields
         def _int(v, default=0):
@@ -222,6 +221,82 @@ class TripImportService:
             "schedules_count": schedule_count,
             "validation_warnings": warnings,
         }
+
+    # ── Province/City abbreviation mapping for code generation ──
+    PROVINCE_ABBR = {
+        "新疆": "XJ", "西藏": "XZ", "云南": "YN", "海南": "HN", "四川": "SC",
+        "贵州": "GZ", "广西": "GX", "广东": "GD", "福建": "FJ", "浙江": "ZJ",
+        "江苏": "JS", "上海": "SH", "北京": "BJ", "天津": "TJ", "重庆": "CQ",
+        "山东": "SD", "河北": "HB", "河南": "HA", "湖北": "HB2", "湖南": "HN2",
+        "江西": "JX", "安徽": "AH", "陕西": "SN", "甘肃": "GS", "青海": "QH",
+        "宁夏": "NX", "内蒙古": "NM", "辽宁": "LN", "吉林": "JL", "黑龙江": "HL",
+        "日本": "JP", "泰国": "TH", "韩国": "KR", "越南": "VN", "欧洲": "EU",
+    }
+    CITY_ABBR = {
+        "伊犁": "YL", "乌鲁木齐": "WQ", "丽江": "LJ", "三亚": "SY", "东京": "DJ",
+        "京都": "JD", "大阪": "DB", "独库": "DK", "天山": "TS", "赛里木湖": "SL",
+        "那拉提": "NL", "吐鲁番": "TL", "喀纳斯": "KN", "大理": "DL", "昆明": "KM",
+        "海口": "HK", "成都": "CD", "重庆": "CQ", "西安": "XA", "青岛": "QD",
+        "敦煌": "DH", "桂林": "GL", "张家界": "ZJ", "黄山": "HS", "厦门": "XM",
+        "呼伦贝尔": "HL", "长白山": "CB", "九寨沟": "JZ", "稻城": "DC",
+    }
+
+    @staticmethod
+    async def _generate_code(trip_data: dict, db) -> str:
+        """Generate standard trip code: {province}-{city}-{year}-{seq}.
+
+        Matches seed data format: YN-LJ-2026-001, HN-SY-2026-002, etc.
+        """
+        from datetime import datetime
+        from sqlalchemy import select, func
+        from app.models.trip import Trip
+
+        dest = trip_data.get("destination", "")
+        province = trip_data.get("province", "")
+        city = trip_data.get("city", "")
+        title = trip_data.get("title", "")
+        all_text = f"{title} {dest} {province} {city}"
+
+        # Find province abbreviation
+        p_abbr = ""
+        for name, abbr in TripImportService.PROVINCE_ABBR.items():
+            if name in all_text:
+                p_abbr = abbr
+                break
+        if not p_abbr:
+            p_abbr = "CN"
+
+        # Find city abbreviation
+        c_abbr = ""
+        for name, abbr in TripImportService.CITY_ABBR.items():
+            if name in all_text:
+                c_abbr = abbr
+                break
+        if not c_abbr:
+            # Use first 2 chars of destination as fallback
+            import re
+            c_abbr = re.sub(r'[^A-Za-z]', '', dest[:4].upper())[:2] or "XX"
+
+        year = str(datetime.now().year)
+
+        # Find next sequence number
+        prefix = f"{p_abbr}-{c_abbr}-{year}-"
+        result = await db.execute(
+            select(Trip.code).where(Trip.code.like(f"{prefix}%"))
+        )
+        existing = result.scalars().all()
+        seq = 1
+        if existing:
+            nums = []
+            for code in existing:
+                try:
+                    nums.append(int(code.split("-")[-1]))
+                except (ValueError, IndexError):
+                    pass
+            if nums:
+                seq = max(nums) + 1
+
+        return f"{prefix}{seq:03d}"
 
     @staticmethod
     def _parse_excel(content: bytes) -> dict:
