@@ -80,9 +80,10 @@ class CapCutExportService:
         trip: Optional[Trip] = None,
         db: Optional[AsyncSession] = None,
     ) -> dict:
-        """Build a CapCut draft_content.json structure from script segments.
+        """Build a CapCut draft_content.json matching the real CapCut schema.
 
-        Returns a dict that can be serialized to CapCut's draft_content.json format.
+        Based on reverse-engineered CapCut format from JianyingDraft.PY / capcut-mcp.
+        Key elements: id, canvas_config, fps, duration, materials, tracks[segments].
         """
         style = cls._get_style(script.platform)
 
@@ -95,182 +96,113 @@ class CapCutExportService:
         if not segments:
             raise ValueError("脚本没有分段数据，请先生成脚本")
 
-        # Calculate total duration
-        total_duration_s = script.duration_seconds
-        total_duration_us = cls._seconds_to_us(total_duration_s)
+        total_duration_us = cls._seconds_to_us(script.duration_seconds)
+        draft_id = script.capcut_draft_id or str(uuid.uuid4())
 
-        track_id_base = str(uuid.uuid4())[:8]
+        # ── Materials: define all text assets ──
+        texts_materials = []
+        audios_materials = []
+        text_segments = []
+        audio_segments = []
 
-        # ── Build tracks ──
-        tracks = []
+        for i, seg in enumerate(segments):
+            start_us = cls._seconds_to_us(sum(s.duration_seconds for s in segments[:i]))
+            dur_us = cls._seconds_to_us(seg.duration_seconds)
 
-        # --- Video/Image track ---
-        video_clips = []
-        image_urls = trip.image_urls if trip and trip.image_urls else []
-        img_idx = 0
-
-        for seg in segments:
-            duration_us = cls._seconds_to_us(seg.duration_seconds)
-            start_us = cls._seconds_to_us(
-                sum(s.duration_seconds for s in segments[:segments.index(seg)])
-            )
-
-            # Assign image (round-robin through trip images)
-            image_ref = ""
-            if image_urls:
-                image_ref = image_urls[img_idx % len(image_urls)]
-                img_idx += 1
-
-            clip = {
-                "id": str(uuid.uuid4()),
-                "type": "image" if image_ref else "placeholder",
-                "file_path": image_ref if image_ref else "",
-                "file_name": image_ref.split("/")[-1] if "/" in image_ref else (image_ref or "placeholder"),
-                "duration_us": duration_us,
-                "start_time_us": start_us,
-                "width": style["width"],
-                "height": style["height"],
-                "transform": {
-                    "x": 0.0, "y": 0.0,
-                    "scale_x": 1.0, "scale_y": 1.0,
-                    "rotation": 0.0,
-                },
-                "segment_type": seg.segment_type,
-            }
-
-            # Add transitions between clips
-            if seg.segment_type == "hook":
-                clip["transition_in"] = {"type": "fade_in", "duration_us": 500000}
-            elif seg.segment_type == "cta":
-                clip["transition_out"] = {"type": "fade_out", "duration_us": 500000}
-
-            video_clips.append(clip)
-
-        tracks.append({
-            "id": f"video_track_{track_id_base}",
-            "type": "video",
-            "is_main": True,
-            "clips": video_clips,
-        })
-
-        # --- Text track ---
-        text_clips = []
-        for seg in segments:
-            duration_us = cls._seconds_to_us(seg.duration_seconds)
-            start_us = cls._seconds_to_us(
-                sum(s.duration_seconds for s in segments[:segments.index(seg)])
-            )
-
-            # Choose text style based on segment type
-            if seg.segment_type == "hook":
-                font_size = style["hook_font_size"]
-                position = {"x": float(style["width"] / 2), "y": float(style["height"] / 2)}
-                anim_in = {"type": "scale_in", "duration_us": 300000}
-                anim_out = {"type": "fade_out", "duration_us": 300000}
-            elif seg.segment_type == "cta":
-                font_size = style["cta_font_size"]
-                position = {"x": float(style["width"] / 2), "y": float(style["height"] - 120)}
-                anim_in = {"type": "slide_up", "duration_us": 300000}
-                anim_out = {"type": "fade_out", "duration_us": 200000}
-            elif seg.segment_type == "detail":
-                font_size = style["body_font_size"]
-                position = {"x": float(style["width"] / 2), "y": float(style["height"] - 80)}
-                anim_in = {"type": "fade_in", "duration_us": 200000}
-                anim_out = {"type": "fade_out", "duration_us": 200000}
-            else:  # highlights
-                font_size = style["body_font_size"]
-                position = {"x": float(style["width"] / 2), "y": float(style["height"] - 100)}
-                anim_in = {"type": "fade_in", "duration_us": 300000}
-                anim_out = {"type": "fade_out", "duration_us": 300000}
-
-            text_clips.append({
-                "id": str(uuid.uuid4()),
+            # Text material
+            mat_id = str(uuid.uuid4())
+            texts_materials.append({
+                "id": mat_id,
                 "type": "text",
                 "content": seg.text,
-                "duration_us": duration_us,
-                "start_time_us": start_us,
-                "style": {
-                    "font_family": style["font_family"],
-                    "font_size": font_size,
-                    "font_color": style["text_color"],
-                    "font_bold": seg.segment_type in ("hook", "cta"),
-                    "alignment": "center",
-                    "position": position,
-                    "background_color": style["bg_color"],
-                    "stroke": {
-                        "color": style["stroke_color"],
-                        "width": style["stroke_width"],
-                    },
-                    "padding": 16,
-                },
-                "animation_in": anim_in,
-                "animation_out": anim_out,
-                "segment_type": seg.segment_type,
+                "font": style["font_family"],
+                "size": style["hook_font_size"] if seg.segment_type == "hook" else style["body_font_size"],
+                "color": style["text_color"],
+                "alignment": 1,  # center
+                "bold": seg.segment_type in ("hook", "cta"),
             })
 
-        tracks.append({
-            "id": f"text_track_{track_id_base}",
-            "type": "text",
-            "clips": text_clips,
-        })
+            # Text segment on timeline
+            text_segments.append({
+                "id": str(uuid.uuid4()),
+                "material_id": mat_id,
+                "target_timerange": {"start": start_us, "duration": dur_us},
+                "source_timerange": {"start": 0, "duration": dur_us},
+                "extra_material_refs": [],
+                "visible": True,
+                "x": 0.0, "y": 0.0,
+                "scale": 1.0,
+            })
 
-        # --- Audio track (BGM placeholder) ---
-        audio_clips = []
-        bgm_names = []
+        # ── Audio material (BGM placeholder) ──
+        bgm_name = "轻快旅行BGM"
         for seg in segments:
-            if seg.bgm_suggestion and seg.bgm_suggestion not in bgm_names:
-                bgm_names.append(seg.bgm_suggestion)
+            if seg.bgm_suggestion:
+                bgm_name = seg.bgm_suggestion
+                break
 
-        audio_clips.append({
+        audio_mat_id = str(uuid.uuid4())
+        audios_materials.append({
+            "id": audio_mat_id,
+            "type": "audio",
+            "name": bgm_name,
+            "duration": total_duration_us,
+        })
+        audio_segments.append({
             "id": str(uuid.uuid4()),
-            "type": "audio",
-            "file_path": "",
-            "is_bgm": True,
-            "bgm_name": bgm_names[0] if bgm_names else "轻快旅行BGM",
-            "bgm_artist": "推荐配乐",
-            "duration_us": total_duration_us,
-            "start_time_us": 0,
+            "material_id": audio_mat_id,
+            "target_timerange": {"start": 0, "duration": total_duration_us},
+            "source_timerange": {"start": 0, "duration": total_duration_us},
+            "extra_material_refs": [],
             "volume": 0.35,
-            "fade_in_us": 500000,
-            "fade_out_us": 1000000,
+            "visible": True,
+            "x": 0.0, "y": 0.0,
+            "scale": 1.0,
         })
 
-        tracks.append({
-            "id": f"audio_track_{track_id_base}",
-            "type": "audio",
-            "clips": audio_clips,
-        })
-
-        # ── Build full draft ──
+        # ── Build the real CapCut schema ──
+        w, h = style["width"], style["height"]
         draft = {
-            "draft_name": script.title or f"{trip.destination if trip else ''}短视频脚本",
-            "draft_id": script.capcut_draft_id or str(uuid.uuid4()),
-            "draft_version": 5,
-            "draft_root_path": "",
-            "draft_tracks": tracks,
-            "draft_materials": {
-                "images": [{"file_path": u} for u in (image_urls or [])],
-                "text_styles": [],
-                "audios": [],
-                "effects": [],
-                "bgm_list": [{"name": n, "artist": "推荐"} for n in bgm_names],
+            "id": draft_id,
+            "version": 1,
+            "canvas_config": {
+                "width": w,
+                "height": h,
+                "ratio": round(w / h, 4),
             },
-            "draft_duration_us": total_duration_us,
-            "draft_resolution": {"width": style["width"], "height": style["height"]},
-            "draft_fps": style["fps"],
-            "draft_create_time": int(datetime.now(timezone.utc).timestamp()),
-            "draft_platform": script.platform,
-            "draft_notes": (
-                f"由欢游HuanYou AI自动生成\n"
-                f"行程: {trip.title if trip else script.trip_id}\n"
-                f"生成时间: {datetime.now(timezone.utc).isoformat()}\n"
-                f"\n使用说明:\n"
-                f"1. 将此文件夹复制到: 文档/CapCut/User Data/Projects/com.lveditor.draft/\n"
-                f"2. 打开剪映 → 点击「剪辑」→ 在草稿列表中找到此项目\n"
-                f"3. 替换占位图片为实际景点照片\n"
-                f"4. 在剪映音乐库中选择BGM替换占位配乐\n"
-                f"5. 预览并导出视频"
-            ),
+            "fps": style["fps"],
+            "duration": total_duration_us,
+            "materials": {
+                "texts": texts_materials,
+                "audios": audios_materials,
+                "videos": [],
+                "images": [],
+                "stickers": [],
+                "effects": [],
+                "transitions": [],
+                "speeds": [],
+                "animations": [],
+                "audio_fades": [],
+                "video_effects": [],
+                "masks": [],
+                "canvases": [],
+            },
+            "tracks": [
+                {
+                    "type": "text",
+                    "name": "字幕轨道",
+                    "render_index": 15000,
+                    "mute": False,
+                    "segments": text_segments,
+                },
+                {
+                    "type": "audio",
+                    "name": "背景音乐",
+                    "render_index": 0,
+                    "mute": False,
+                    "segments": audio_segments,
+                },
+            ],
         }
 
         return draft
@@ -303,72 +235,46 @@ class CapCutExportService:
 
         # Build draft JSON
         draft = await cls.build_draft_json(script, trip, db)
-        draft_id = draft["draft_id"]
-        draft_name = draft["draft_name"]
+        draft_id = draft["id"]
+        draft_name = script.title or f"{trip.destination if trip else ''}短视频脚本"
+        # Sanitize folder name: remove problematic chars
+        safe_folder = draft_name.replace(" ", "_").replace("/", "_").replace("\\", "_")[:50]
 
         # Create ZIP in memory
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             # Write draft_content.json
             draft_json = json.dumps(draft, ensure_ascii=False, indent=2)
-            zf.writestr(f"{draft_name}/draft_content.json", draft_json)
+            zf.writestr(f"{safe_folder}/draft_content.json", draft_json)
 
-            # Write draft_meta_info.json
+            # Write minimal draft_meta_info.json
             meta = {
-                "draft_id": draft_id,
-                "draft_name": draft_name,
-                "draft_version": 5,
-                "create_time": draft["draft_create_time"],
-                "platform": script.platform,
-                "resolution": f"{draft['draft_resolution']['width']}x{draft['draft_resolution']['height']}",
-                "duration_seconds": script.duration_seconds,
-                "generated_by": "HuanYou AI",
+                "id": draft_id,
+                "create_time": int(datetime.now(timezone.utc).timestamp()),
             }
             zf.writestr(
-                f"{draft_name}/draft_meta_info.json",
+                f"{safe_folder}/draft_meta_info.json",
                 json.dumps(meta, ensure_ascii=False, indent=2),
             )
-
-            # Write resources README
-            resources_readme = (
-                "图片素材文件夹\n"
-                "==============\n\n"
-                "请将行程相关的景点照片放入此文件夹，文件名与draft_content.json中的file_path对应。\n\n"
-                f"行程: {trip.title if trip else '未知'}\n"
-                f"目的地: {trip.destination if trip else '未知'}\n\n"
-                "建议图片:\n"
-            )
-            if trip and trip.highlights:
-                for h in trip.highlights:
-                    resources_readme += f"  - {h}\n"
-            resources_readme += (
-                "\n没有图片也可以用纯色背景替代，剪映会自动生成占位图。\n"
-            )
-            zf.writestr(f"{draft_name}/resources/README.txt", resources_readme)
 
             # Write usage instructions
             instructions = (
                 "剪映导入说明\n"
                 "============\n\n"
-                "1. 将整个文件夹复制到:\n"
+                "1. 解压此ZIP文件\n"
+                "2. 将整个文件夹复制到剪映草稿目录:\n"
                 "   Windows: 文档\\CapCut\\User Data\\Projects\\com.lveditor.draft\\\n"
                 "   Mac: ~/Movies/CapCut/User Data/Projects/com.lveditor.draft/\n\n"
-                "2. 打开剪映桌面版\n\n"
-                "3. 点击「开始创作」或查看「草稿」列表\n\n"
-                "4. 找到草稿「{draft_name}」并打开\n\n"
-                "5. 替换资源文件夹中的占位图片为实际照片\n\n"
-                "6. 在剪映音频库中选择合适的BGM替换占位配乐\n\n"
-                "7. 调整文字样式和动画效果\n\n"
-                "8. 点击「导出」选择分辨率和格式\n\n"
-                "常见问题:\n"
-                "Q: 打开剪映找不到草稿？\n"
-                "A: 确认已复制到正确的目录，重启剪映后再试。\n\n"
-                "Q: 文字显示乱码？\n"
-                "A: 在剪映中重新选择中文字体即可。\n\n"
-                "Q: 没有图片怎么办？\n"
-                "A: 剪映会自动使用纯色占位图，您可以手动添加景点照片。\n"
-            ).format(draft_name=draft_name)
-            zf.writestr(f"{draft_name}/使用说明.txt", instructions)
+                "3. 打开剪映桌面版 → 点击「剪辑」→ 在草稿列表中找到此项目\n"
+                "4. 在剪映中为每段文字添加动画效果\n"
+                "5. 在剪映音乐库中搜索BGM并添加到音频轨道\n"
+                "6. 可选: 添加景点照片到视频轨道\n"
+                "7. 预览并导出视频\n\n"
+                f"行程: {trip.title if trip else '未知'}\n"
+                f"生成时间: {datetime.now(timezone.utc).isoformat()}\n"
+                f"由欢游HuanYou AI自动生成\n"
+            )
+            zf.writestr(f"{safe_folder}/使用说明.txt", instructions)
 
         zip_bytes = zip_buffer.getvalue()
 
