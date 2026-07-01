@@ -236,10 +236,18 @@ async function handleGenerate() {
   genStage.value = 1
   genStatus.value = 'running'
 
-  // Animate stages
-  const stageTimer = setInterval(() => {
-    if (genStage.value < 3) genStage.value++
-  }, 1500)
+  // Animate stages: 研究(2s) → 生成(5s) → 润色(8s) → 评估(wait for API)
+  const stageDelays = [2000, 5000, 8000]
+  const stageTimers: number[] = []
+  for (let i = 0; i < stageDelays.length; i++) {
+    stageTimers.push(window.setTimeout(() => {
+      genStage.value = i + 1
+    }, stageDelays[i]))
+  }
+  // Stage 4 (评估中) — show after 10s, but still waiting for API
+  stageTimers.push(window.setTimeout(() => {
+    if (genStatus.value === 'running') genStage.value = 4
+  }, 10000))
 
   try {
     const script = await scriptApi.generate({
@@ -250,15 +258,15 @@ async function handleGenerate() {
     })
     currentScript.value = script
     segments.value = script.segments || []
-    genStage.value = 4
+    genStage.value = 5
     genStatus.value = script.status
     loadHistory()
   } catch (e: any) {
     genStatus.value = 'failed'
     ElMessage.error(e?.response?.data?.detail || '生成失败')
   } finally {
-    clearInterval(stageTimer)
-    setTimeout(() => { if (currentScript.value) currentStep.value = 4 }, 800)
+    stageTimers.forEach(t => clearTimeout(t))
+    setTimeout(() => { if (currentScript.value) currentStep.value = 4 }, 600)
   }
 }
 
@@ -304,6 +312,8 @@ async function handleRegenerate() {
     })
     currentScript.value = script
     segments.value = script.segments || []
+    genStage.value = 5
+    genStatus.value = script.status
     currentStep.value = 4
   } catch { /* handled */ } finally { regenerating.value = false }
 }
