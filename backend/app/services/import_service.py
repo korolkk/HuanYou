@@ -182,6 +182,10 @@ class TripImportService:
             group_size_min=_int(trip_data.get("group_size_min", trip_data.get("成团最小人数", 1))),
             group_size_max=_int(trip_data.get("group_size_max", trip_data.get("成团最大人数"))) or None,
             departure_dates=_list(trip_data.get("departure_dates", trip_data.get("发团日期"))),
+            summary=str(trip_data.get("summary", "")) if trip_data.get("summary") else None,
+            highlights=_list(trip_data.get("highlights", [])),
+            recommendation_reasons=_list(trip_data.get("recommendation_reasons", [])),
+            detailed_description=str(trip_data.get("detailed_description", "")) if trip_data.get("detailed_description") else None,
             status="active",
             created_by=created_by,
         )
@@ -632,6 +636,66 @@ class TripImportService:
 
         trip["price_includes"] = includes[:10] if includes else []
         trip["price_excludes"] = excludes[:10] if excludes else []
+
+        # ── Extract highlights ──
+        highlights = []
+        # Patterns: bullet points after "亮点"/"特色"/"卖点" keywords
+        in_highlights = False
+        for p in paragraphs:
+            txt = p["text"]
+            if any(kw in txt for kw in ["产品亮点", "行程亮点", "线路特色", "推荐理由", "产品特色"]):
+                in_highlights = True
+                continue
+            if in_highlights and len(txt) > 8:
+                if any(kw in txt for kw in ["费用包含", "费用不含", "温馨提示", "注意事项", "报名须知"]):
+                    in_highlights = False
+                    continue
+                # Clean up bullet markers
+                cleaned = re.sub(r'^[\d\.\、\-\•\★\☆\s]+', '', txt)
+                if len(cleaned) > 5:
+                    highlights.append(cleaned)
+                if len(highlights) >= 6:
+                    break
+        # Fallback: look for "0购物0自费" style selling points
+        if not highlights:
+            for p in paragraphs:
+                txt = p["text"]
+                if any(kw in txt for kw in ["0购物", "纯玩", "一价全含", "自组团", "管家", "赠送", "升级"]):
+                    highlights.append(txt[:80])
+                    if len(highlights) >= 5:
+                        break
+        trip["highlights"] = highlights[:6]
+
+        # ── Auto-generate summary ──
+        dest = trip.get("destination", "")
+        days = trip.get("duration_days", "")
+        price = trip.get("price_adult", "")
+        departure = trip.get("departure_city", "")
+        title = trip.get("title", "")
+
+        summary_parts = [f"{dest}{days}日游"]
+        if "纯玩" in title:
+            summary_parts.append("纯玩0购物")
+        if price:
+            summary_parts.append(f"成人¥{int(price)}/人起")
+        if departure:
+            summary_parts.append(f"从{departure}出发")
+        if highlights:
+            summary_parts.append(f"特色：{'、'.join(highlights[:3])}")
+
+        trip["summary"] = f"{title}，{'，'.join(summary_parts[1:])}。" if len(summary_parts) > 1 else title
+
+        # ── Generate recommendation reasons ──
+        reasons = []
+        if "纯玩" in title or "0购物" in title:
+            reasons.append("纯玩0购物，品质保障")
+        if price:
+            reasons.append(f"超高性价比，成人仅需¥{int(price)}/人")
+        if departure:
+            reasons.append(f"{departure}出发，交通便利")
+        if highlights:
+            reasons.append(highlights[0] if highlights[0] else "")
+        trip["recommendation_reasons"] = [r for r in reasons if r][:3]
 
         return {"trip": trip, "schedules": schedules}
 
