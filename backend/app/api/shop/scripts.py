@@ -170,7 +170,6 @@ async def evaluate_script(
 @router.post("/{script_id}/export/capcut")
 async def export_capcut(
     script_id: str,
-    data: ScriptExportRequest = ScriptExportRequest(),
     db: AsyncSession = Depends(get_db),
     current_user: Customer = Depends(get_shop_owner),
 ):
@@ -178,21 +177,21 @@ async def export_capcut(
     try:
         zip_bytes, draft_id, draft_name = await CapCutExportService.create_draft_zip(
             script_id=script_id,
-            include_images=data.include_images,
-            resolution=data.resolution,
             db=db,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
 
-    safe_name = draft_name.replace(" ", "_").replace("/", "_")
+    from urllib.parse import quote
+    safe_name = quote(draft_name.replace(" ", "_").replace("/", "_"))
     return StreamingResponse(
         io.BytesIO(zip_bytes),
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}_CapCut.zip"',
+            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_name}_CapCut.zip",
             "X-Draft-Id": draft_id,
-            "X-Draft-Name": draft_name.encode("utf-8").decode("latin-1", errors="replace"),
         },
     )
 
